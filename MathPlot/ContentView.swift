@@ -8,12 +8,18 @@
 import SwiftUI
 
 struct ContentView: View {
+    @State var renderer = Renderer()
+    
     var body: some View {
         VStack {
             Image(systemName: "globe")
                 .imageScale(.large)
                 .foregroundColor(.accentColor)
             Text("Hello, world!")
+            
+            MTKViewContainer(renderer: renderer)
+                .frame(width:  300.0,
+                       height: 300.0)
         }
         .padding()
     }
