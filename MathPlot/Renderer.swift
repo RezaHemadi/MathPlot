@@ -11,7 +11,6 @@ import Matrix
 import os.signpost
 
 let kMaxBuffersInFlight = 3
-let kMaxVertices = 10_000
 
 enum RendererError: Error {
     case library
@@ -43,32 +42,50 @@ class Renderer: NSObject, MTKViewDelegate {
     var renderState: MTLRenderPipelineState!
     var _inFlightSemaphore = DispatchSemaphore(value: kMaxBuffersInFlight)
     
-    var vertices: Mat<Float>
-    var indices: Vec<UInt32>
-    var vertexBuffer: MTLBuffer!
-    var indexBuffer: MTLBuffer!
-    var vertexBufferAddress: UnsafeMutableRawPointer!
-    var vertexBufferOffset: Int = 0
+    var axisVBuffer: MTLBuffer!
+    var axisIndexBuffer: MTLBuffer!
+    var axisVBufferOffset: Int = 0
+    
     var dynamicBufferIndex: Int = 0
-    var vertexCount: Int = 4
+    
+    var axisVertices: Mat<Float>
+    var axisIndices: Vec<UInt32>
+    var axisVBufferAddress: UnsafeMutableRawPointer!
+    
+    var curveVertices: Mat<Float>
+    var curveIndices: Vec<UInt32>
+    var curveVBuffer: MTLBuffer!
+    var curveIndexBuffer: MTLBuffer!
+    var curveVBufferOffset: Int = 0
+    var curveVBufferAddress: UnsafeMutableRawPointer!
+    
     
     // MARK: - Initialization
     override init() {
         let device = GPUDevice.shared
         
-        vertices = .init(vertexCount, 2)
-        indices = .init([0, 1, 2, 3])
+        // Initialize axis vertices and indices
+        axisVertices = .init(4, 2)
+        axisIndices = .init([0, 1, 2, 3])
+        axisVertices.row(0) <<== [-1.0, 0.0]
+        axisVertices.row(1) <<== [1.0, 0.0]
+        axisVertices.row(2) <<== [0.0, -1.0]
+        axisVertices.row(3) <<== [0.0, 1.0]
         
-        vertices.row(0) <<== [-1.0, 0.0]
-        vertices.row(1) <<== [1.0, 0.0]
-        vertices.row(2) <<== [0.0, -1.0]
-        vertices.row(3) <<== [0.0, 1.0]
+        // Initialize curve vertices and indices
+        curveVertices = .init([0.0, 0.5, 1.0, 0.5], [2, 2])
+        curveIndices = .init([0, 1])
         
-        // initialize buffers
-        vertexBuffer = device.makeBuffer(length: MemoryLayout<Float>.size * 2 * kMaxVertices * kMaxBuffersInFlight)
-        vertexBufferAddress = vertexBuffer.contents()
-        indexBuffer = device.makeBuffer(length: MemoryLayout<UInt32>.size * 10)
-        indexBuffer.contents().assumingMemoryBound(to: UInt32.self).initialize(from: indices.valuesPtr.pointer, count: 10)
+        // initialize axis buffers
+        axisVBuffer = device.makeBuffer(length: MemoryLayout<Float>.size * 2 * 4 * kMaxBuffersInFlight)
+        axisVBufferAddress = axisVBuffer.contents()
+        axisIndexBuffer = device.makeBuffer(length: MemoryLayout<UInt32>.size * axisIndices.count)
+        axisIndexBuffer.contents().assumingMemoryBound(to: UInt32.self).initialize(from: axisIndices.valuesPtr.pointer, count: 4)
+        
+        // initialize curve buffers
+        curveVBuffer = device.makeBuffer(length: MemoryLayout<Float>.size * curveVertices.size.count * kMaxBuffersInFlight)
+        curveIndexBuffer = device.makeBuffer(length: MemoryLayout<UInt32>.size * curveIndices.count)
+        curveIndexBuffer.contents().assumingMemoryBound(to: UInt32.self).initialize(from: curveIndices.valuesPtr.pointer, count: curveIndices.count)
         
         super.init()
     }
@@ -108,15 +125,20 @@ class Renderer: NSObject, MTKViewDelegate {
         
         self.commandQueue = commandQueue
     }
+    
     func updateDynamicBuffers() {
         dynamicBufferIndex = (dynamicBufferIndex + 1) % kMaxBuffersInFlight
         
-        vertexBufferOffset = MemoryLayout<Float>.size * 2 * kMaxVertices * dynamicBufferIndex
-        vertexBufferAddress = vertexBuffer.contents().advanced(by: vertexBufferOffset)
+        axisVBufferOffset = MemoryLayout<Float>.size * 2 * 4 * dynamicBufferIndex
+        curveVBufferOffset = MemoryLayout<Float>.size * curveVertices.size.count * dynamicBufferIndex
+        
+        axisVBufferAddress = axisVBuffer.contents().advanced(by: axisVBufferOffset)
+        curveVBufferAddress = curveVBuffer.contents().advanced(by: curveVBufferOffset)
     }
     
     func updateAppState() {
-        vertexBufferAddress.assumingMemoryBound(to: Float.self).initialize(from: vertices.valuesPtr.pointer, count: vertices.size.count)
+        axisVBufferAddress.assumingMemoryBound(to: Float.self).initialize(from: axisVertices.valuesPtr.pointer, count: axisVertices.size.count)
+        curveVBufferAddress.assumingMemoryBound(to: Float.self).initialize(from: curveVertices.valuesPtr.pointer, count: curveVertices.size.count)
     }
     
     // MARK: - MTKViewDelegate
@@ -133,9 +155,15 @@ class Renderer: NSObject, MTKViewDelegate {
             updateAppState()
             
             if let renderPassDescriptor = view.currentRenderPassDescriptor, let renderEncoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) {
+                // Draw Axis lines
                 renderEncoder.setRenderPipelineState(renderState)
-                renderEncoder.setVertexBuffer(vertexBuffer, offset: vertexBufferOffset, index: 0)
-                renderEncoder.drawIndexedPrimitives(type: .line, indexCount: vertexCount, indexType: .uint32, indexBuffer: indexBuffer, indexBufferOffset: 0)
+                renderEncoder.setVertexBuffer(axisVBuffer, offset: axisVBufferOffset, index: 0)
+                renderEncoder.drawIndexedPrimitives(type: .line, indexCount: axisIndices.count, indexType: .uint32, indexBuffer: axisIndexBuffer, indexBufferOffset: 0)
+                
+                // Draw curve
+                renderEncoder.setVertexBuffer(curveVBuffer, offset: curveVBufferOffset, index: 0)
+                renderEncoder.drawIndexedPrimitives(type: .line, indexCount: curveIndices.count, indexType: .uint32, indexBuffer: curveIndexBuffer, indexBufferOffset: 0)
+                
                 
                 renderEncoder.endEncoding()
                 
@@ -148,6 +176,6 @@ class Renderer: NSObject, MTKViewDelegate {
     }
     
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
-        os_log(.info, "drawable size changed")
+        
     }
 }

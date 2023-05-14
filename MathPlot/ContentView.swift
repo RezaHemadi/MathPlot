@@ -12,14 +12,8 @@ struct ContentView: View {
     
     var body: some View {
         VStack {
-            Image(systemName: "globe")
-                .imageScale(.large)
-                .foregroundColor(.accentColor)
-            Text("Hello, world!")
-            
+            Text("Curve Plotter")
             MTKViewContainer(renderer: renderer)
-                .frame(width:  300.0,
-                       height: 300.0)
         }
         .padding()
     }
